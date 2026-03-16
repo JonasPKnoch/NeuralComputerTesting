@@ -1,0 +1,69 @@
+import torch
+import torch.nn as nn
+from typing import Self
+
+class TMTransition:
+    def __init__(self, write_symbol: int, new_state: int, move: int):
+        self.write_symbol = write_symbol
+        self.new_state = new_state
+        self.move = move
+
+class TMState:
+    def __init__(self, initial_memory=torch.zeros([0], dtype=float), initial_position=0, initial_state=0, symbol_count=2, state_count=8, move_count=4):
+        self.symbol_count = symbol_count
+        self.state_count = state_count
+        self.move_count = move_count
+        
+        self.memory = initial_memory
+        self.position = initial_position
+        self.state = initial_state
+
+        self.last_frame = None
+        self.last_transition = None
+        self.run_steps = 0
+    
+    def get_read_symbol(self) -> float:
+        return self.memory[self.position]
+    
+    def apply_transition(self, transition: TMTransition) -> Self:
+        assert transition.write_symbol in range(0, self.symbol_count)
+        assert transition.new_state in range(0, self.state_count)
+        assert transition.move in range(-self.move_count - 1, self.move_count + 1) and transition.move != 0
+
+        new_state = transition.new_state
+        new_position = self.position + transition.move
+        if new_position < 0:
+            new_position = 0
+
+        mem_size = self.memory.shape[0]
+        padding_right = 0
+        while new_position >= mem_size:
+            padding_right += mem_size
+            mem_size += mem_size
+        new_memory = nn.functional.pad(self.memory, (0, padding_right))
+        new_memory[self.position] = transition.write_symbol
+
+        new_tm = TMState(new_memory, new_position, new_state, self.symbol_count, self.state_count, self.move_count)
+        new_tm.last_frame = self
+        new_tm.last_transition = transition
+        new_tm.run_steps = self.run_steps + 1
+
+        return new_tm
+
+    def enumerate_transitions(self):
+        for symbol in range(self.symbol_count):
+            for state in range(self.state_count):
+                for move in range(1, self.move_count + 1):
+                    for sign in [-1, 1]:
+                        yield TMTransition(symbol, state, move*sign)
+    
+    def __str__(self):
+        result = f"POS:{self.position}, STATE:{self.state}, MEM:"
+        for i in range(self.memory.shape[0]):
+            result += " " + str(int(self.memory[i]))
+        
+        return result
+
+def get_action_tensor(prior_state: TMState, transition: TMTransition):
+    return torch.tensor(
+            [transition.write_symbol, transition.new_state, transition.move, prior_state.get_read_symbol(), prior_state.state])
