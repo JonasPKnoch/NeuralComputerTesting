@@ -1,6 +1,8 @@
+import mcts
 import torch
 import torch.nn as nn
-from typing import Self
+from typing import Self, Iterable, Optional
+import random
 
 class TMTransition:
     def __init__(self, write_symbol: int, new_state: int, move: int):
@@ -8,8 +10,8 @@ class TMTransition:
         self.new_state = new_state
         self.move = move
 
-class TMState:
-    def __init__(self, initial_memory=torch.zeros([0], dtype=float), initial_position=0, initial_state=0, symbol_count=2, state_count=8, move_count=4):
+class TMState(mcts.MCTSState):
+    def __init__(self, initial_memory: torch.tensor, target_memory: torch.tensor, initial_position=0, initial_state=0, symbol_count=2, state_count=8, move_count=4):
         self.symbol_count = symbol_count
         self.state_count = state_count
         self.move_count = move_count
@@ -17,10 +19,40 @@ class TMState:
         self.memory = initial_memory
         self.position = initial_position
         self.state = initial_state
+        self.target_memory = target_memory
+        self.target_size = target_memory.shape[0]
+        self.inverse_target_size = 1.0/self.target_size
 
         self.last_frame = None
         self.last_transition = None
         self.run_steps = 0
+
+        self.distance_function = nn.L1Loss()
+
+    def all_next_states(self) -> Iterable[Self]:
+        for transition in self.enumerate_transitions():
+            yield self.apply_transition(transition)
+    
+    def random_next_state(self) -> Self:
+        transition = TMTransition(random.randint(0, self.symbol_count-1), random.randint(0, self.state_count-1), random.randint(1, self.move_count)*random.choice([-1, 1]))
+        return self.apply_transition(transition)
+    
+    def terminal_value(self) -> Optional[float]:
+        if self.state != self.state_count - 1:
+            return None
+
+        fit_memory = self.memory
+        fit_target = self.target_memory
+        memory_size = self.memory.shape[0]
+        if memory_size < self.target_size:
+            fit_memory = nn.functional.pad(fit_memory, (0, self.target_size - memory_size))
+        elif memory_size > self.target_size:
+            fit_target = nn.functional.pad(fit_target, (0, memory_size - self.target_size))
+        
+        closeness = 1.0 - self.distance_function(fit_memory, fit_target)
+        step = self.inverse_target_size/self.run_steps
+
+        return closeness*2.0 + step
     
     def get_read_symbol(self) -> float:
         return self.memory[self.position]
@@ -43,7 +75,7 @@ class TMState:
         new_memory = nn.functional.pad(self.memory, (0, padding_right))
         new_memory[self.position] = transition.write_symbol
 
-        new_tm = TMState(new_memory, new_position, new_state, self.symbol_count, self.state_count, self.move_count)
+        new_tm = TMState(new_memory, self.target_memory, new_position, new_state, self.symbol_count, self.state_count, self.move_count)
         new_tm.last_frame = self
         new_tm.last_transition = transition
         new_tm.run_steps = self.run_steps + 1
