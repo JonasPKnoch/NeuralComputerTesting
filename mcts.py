@@ -96,4 +96,3 @@ def random_rollout(node: MCTSNode) -> float:
         current_state = current_state.random_next_state()
     
     return current_state.terminal_value()
-        

@@ -89,6 +89,30 @@ class TMState(mcts.MCTSState):
                     for sign in [-1, 1]:
                         yield TMTransition(symbol, state, move*sign)
     
+    def get_transition_from_index(self, index: int) -> TMTransition:
+        # Equivalent to list(enumerate_transitions())[index]
+        sign = [-1, 1][index%2]
+        index -= index%2
+        
+        move = index%self.move_count
+        index -= index%self.move_count
+
+        state = index%self.state_count
+        index -= index%self.state_count
+        
+        symbol = index%self.symbol_count
+        index -= index%self.symbol_count
+
+        if index != 0:
+            raise Exception("Something ain't right")
+        
+        return TMTransition(symbol, state, move*sign)
+
+
+
+    def transition_count(self):
+        return self.symbol_count*self.state_count*self.move_count*2
+    
     def __str__(self):
         result = f"POS:{self.position}, STATE:{self.state}, MEM:"
         for i in range(self.memory.shape[0]):
@@ -99,3 +123,7 @@ class TMState(mcts.MCTSState):
 def get_action_tensor(prior_state: TMState, transition: TMTransition):
     return torch.tensor(
             [transition.write_symbol, transition.new_state, transition.move, prior_state.get_read_symbol(), prior_state.state])
+
+def get_state_tensor(prior_state: TMState):
+    return torch.tensor([prior_state.get_read_symbol(), prior_state.state])
+
