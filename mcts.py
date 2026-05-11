@@ -1,6 +1,6 @@
 import math
 import random
-from typing import Iterable, Callable, Self, Optional, List
+from typing import Iterable, Callable, Self, Optional, List, Tuple
 
 class MCTSState:
     def all_next_states(self) -> Iterable[Self]:
@@ -24,7 +24,7 @@ class MCTSNode:
     def add_children(self):
         self.children = [MCTSNode(child, self) for child in self.state.all_next_states()]
 
-class MCTS:
+class MCTSearch:
     def __init__(self, root_node: MCTSNode, rollout_function: Callable[[MCTSNode], float]):
         self.root = root_node
         self.rollout = rollout_function
@@ -72,20 +72,25 @@ class MCTS:
 
         return exploit_term + 2.0*explore_term
 
-def play_mcts_game(root_node: MCTSNode, rollout_function: Callable[[MCTSNode], float], iterations = 10000) -> List[List[MCTSNode]]:
-    node_path = []
+def play_mcts_game(root_node: MCTSNode, rollout_function: Callable[[MCTSNode], float], iterations = 10000) -> List[MCTSNode]:
     current_root = root_node
+    node_path = [root_node]
 
-    while current_root.state.terminal_value() != None:
-        mcts = MCTS(current_root, rollout_function)
-        for i in range(iterations):
+    while current_root.state.terminal_value() == None:
+        mcts = MCTSearch(current_root, rollout_function)
+
+        for _ in range(iterations):
             mcts.perform_iteration()
-        node_path.append(current_root.children)
+
         best_child = current_root.children[0]
         for child in current_root.children[1:]:
             if child.number_visits > best_child.number_visits:
                 best_child = child
         current_root = best_child
+        node_path.append(best_child)
+        print(f"Node {len(node_path)} completed")
+    
+    return node_path
             
 
 

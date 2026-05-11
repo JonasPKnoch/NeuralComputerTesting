@@ -3,15 +3,27 @@ import torch
 import torch.nn as nn
 from typing import Self, Iterable, Optional
 import random
+import numpy as np
 
 class TMTransition:
     def __init__(self, write_symbol: int, new_state: int, move: int):
         self.write_symbol = write_symbol
         self.new_state = new_state
         self.move = move
+    
+    def __str__(self):
+        return f"(Write={self.write_symbol},State={self.new_state},Move={self.move})"
+    
+    def __eq__(self, other):
+        return self.write_symbol == other.write_symbol and self.new_state == other.new_state and self.move == other.move
+    
+    def __ne__(self, other):
+        return not (self == other)
 
 class TMState(mcts.MCTSState):
-    def __init__(self, initial_memory: torch.tensor, target_memory: torch.tensor, initial_position=0, initial_state=0, symbol_count=2, state_count=8, move_count=4):
+    def __init__(
+            self, initial_memory: torch.tensor = torch.zeros((1,)), target_memory: torch.tensor = torch.zeros((1,)), 
+            initial_position=0, initial_state=0, symbol_count=2, state_count=8, move_count=4):
         self.symbol_count = symbol_count
         self.state_count = state_count
         self.move_count = move_count
@@ -63,7 +75,7 @@ class TMState(mcts.MCTSState):
         assert transition.move in range(-self.move_count - 1, self.move_count + 1) and transition.move != 0
 
         new_state = transition.new_state
-        new_position = self.position + transition.move
+        new_position = int(self.position + transition.move)
         if new_position < 0:
             new_position = 0
 
@@ -92,23 +104,28 @@ class TMState(mcts.MCTSState):
     def get_transition_from_index(self, index: int) -> TMTransition:
         # Equivalent to list(enumerate_transitions())[index]
         sign = [-1, 1][index%2]
-        index -= index%2
+        index = np.floor(index/2)
         
-        move = index%self.move_count
-        index -= index%self.move_count
+        move = index%self.move_count + 1
+        index = np.floor(index/self.move_count)
 
         state = index%self.state_count
-        index -= index%self.state_count
+        index = np.floor(index/self.state_count)
         
         symbol = index%self.symbol_count
-        index -= index%self.symbol_count
+        index = np.floor(index/self.symbol_count)
 
         if index != 0:
-            raise Exception("Something ain't right")
+            raise Exception(f"Something ain't right, {index} should be 0: sign={sign}, move={move}, state={state}, symbol={symbol}")
         
-        return TMTransition(symbol, state, move*sign)
+        return TMTransition(int(symbol), int(state), int(move*sign))
 
-
+    def get_index_from_transition(self, transition: TMTransition):
+        index = transition.write_symbol*self.state_count*self.move_count*2
+        index += transition.new_state*self.move_count*2
+        index += (np.abs(transition.move) - 1)*2
+        index += 0 if transition.move < 0 else 1
+        return index
 
     def transition_count(self):
         return self.symbol_count*self.state_count*self.move_count*2
@@ -125,5 +142,5 @@ def get_action_tensor(prior_state: TMState, transition: TMTransition):
             [transition.write_symbol, transition.new_state, transition.move, prior_state.get_read_symbol(), prior_state.state])
 
 def get_state_tensor(prior_state: TMState):
-    return torch.tensor([prior_state.get_read_symbol(), prior_state.state])
+    return torch.tensor([prior_state.get_read_symbol(), prior_state.state], dtype=torch.float32)
 
