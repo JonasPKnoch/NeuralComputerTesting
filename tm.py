@@ -1,146 +1,71 @@
-import mcts
 import torch
-import torch.nn as nn
-from typing import Self, Iterable, Optional
-import random
-import numpy as np
+from typing import List, Dict, Tuple, Self
 
-class TMTransition:
-    def __init__(self, write_symbol: int, new_state: int, move: int):
-        self.write_symbol = write_symbol
-        self.new_state = new_state
-        self.move = move
-    
-    def __str__(self):
-        return f"(Write={self.write_symbol},State={self.new_state},Move={self.move})"
-    
-    def __eq__(self, other):
-        return self.write_symbol == other.write_symbol and self.new_state == other.new_state and self.move == other.move
-    
-    def __ne__(self, other):
-        return not (self == other)
-
-class TMState(mcts.MCTSState):
-    def __init__(
-            self, initial_memory: torch.tensor = torch.zeros((1,)), target_memory: torch.tensor = torch.zeros((1,)), 
-            initial_position=0, initial_state=0, symbol_count=2, state_count=8, move_count=4):
+class TMDefinition:
+    def __init__(self, symbol_count: int, state_count: int, move_count: int, halt_state:int=1):
         self.symbol_count = symbol_count
         self.state_count = state_count
         self.move_count = move_count
+        self.halt_state = halt_state
+    
+    def rule_valid(self, head: Tuple[int, int], body: Tuple[int, int, int]) -> bool:
+        state, read = head
+        write, move, new_state = body
+        return \
+            state != self.halt_state and state in range(self.state_count) and\
+            read in range(self.symbol_count) and\
+            write in range(self.symbol_count) and\
+            new_state in range(self.state_count) and\
+            move in range(-self.move_count, self.move_count) and move != 0
+
+TMStatelessTransition = Tuple[int, Tuple[int, int]]
+TMRuleSet = Dict[Tuple[int, int], Tuple[int, int, int]]
+
+class TuringMachine:
+    def __init__(self, rules: TMRuleSet,
+                 definition: TMDefinition,
+                 tape: List[int] = [], position: int = 0, state: int = 1, 
+                 previous_state: Self = None):
+        self.rules = rules
+        self.definition = definition
+        for head, body in rules:
+            assert definition.rule_valid(head, body)
         
-        self.memory = initial_memory
-        self.position = initial_position
-        self.state = initial_state
-        self.target_memory = target_memory
-        self.target_size = target_memory.shape[0]
-        self.inverse_target_size = 1.0/self.target_size
-
-        self.last_frame = None
-        self.last_transition = None
-        self.run_steps = 0
-
-        self.distance_function = nn.L1Loss()
-
-    def all_next_states(self) -> Iterable[Self]:
-        for transition in self.enumerate_transitions():
-            yield self.apply_transition(transition)
+        self.tape = tape
+        self.position = position
+        self.state = state
+        self.previous_state = previous_state
+        if previous_state == None:
+            self.depth = 1
+        else:
+            self.depth = previous_state.depth + 1
     
-    def random_next_state(self) -> Self:
-        transition = TMTransition(random.randint(0, self.symbol_count-1), random.randint(0, self.state_count-1), random.randint(1, self.move_count)*random.choice([-1, 1]))
-        return self.apply_transition(transition)
+    def halting(self) -> bool:
+        return self.state == self.definition.halt_state
     
-    def terminal_value(self) -> Optional[float]:
-        if self.state != self.state_count - 1:
+    def transition(self) -> Self:
+        if self.halting():
             return None
-
-        fit_memory = self.memory
-        fit_target = self.target_memory
-        memory_size = self.memory.shape[0]
-        if memory_size < self.target_size:
-            fit_memory = nn.functional.pad(fit_memory, (0, self.target_size - memory_size))
-        elif memory_size > self.target_size:
-            fit_target = nn.functional.pad(fit_target, (0, memory_size - self.target_size))
         
-        closeness = 1.0 - self.distance_function(fit_memory, fit_target)
-        step = self.inverse_target_size/self.run_steps
+        write, move, new_state = self.rules[self.get_rule_head()]
 
-        return closeness*2.0 + step
-    
-    def get_read_symbol(self) -> float:
-        return self.memory[self.position]
-    
-    def apply_transition(self, transition: TMTransition) -> Self:
-        assert transition.write_symbol in range(0, self.symbol_count)
-        assert transition.new_state in range(0, self.state_count)
-        assert transition.move in range(-self.move_count - 1, self.move_count + 1) and transition.move != 0
+        new_tape = self.tape.copy()
+        new_tape[self.position] = write
 
-        new_state = transition.new_state
-        new_position = int(self.position + transition.move)
+        new_position = self.position + move
+        if new_position > len(new_tape):
+            new_tape.extend([0 for _ in range(len(new_tape))])
         if new_position < 0:
             new_position = 0
-
-        mem_size = self.memory.shape[0]
-        padding_right = 0
-        while new_position >= mem_size:
-            padding_right += mem_size
-            mem_size += mem_size
-        new_memory = nn.functional.pad(self.memory, (0, padding_right))
-        new_memory[self.position] = transition.write_symbol
-
-        new_tm = TMState(new_memory, self.target_memory, new_position, new_state, self.symbol_count, self.state_count, self.move_count)
-        new_tm.last_frame = self
-        new_tm.last_transition = transition
-        new_tm.run_steps = self.run_steps + 1
-
-        return new_tm
-
-    def enumerate_transitions(self):
-        for symbol in range(self.symbol_count):
-            for state in range(self.state_count):
-                for move in range(1, self.move_count + 1):
-                    for sign in [-1, 1]:
-                        yield TMTransition(symbol, state, move*sign)
+        
+        return TuringMachine(self.rules, new_tape, new_position, new_state, self)
+        
+    def get_rule_head(self) -> Tuple[int, int]:
+        return (self.state, self.tape[self.position])
     
-    def get_transition_from_index(self, index: int) -> TMTransition:
-        # Equivalent to list(enumerate_transitions())[index]
-        sign = [-1, 1][index%2]
-        index = np.floor(index/2)
-        
-        move = index%self.move_count + 1
-        index = np.floor(index/self.move_count)
+    def get_stateless_transition(self) -> TMStatelessTransition:
+        rule_head = self.get_rule_head()
+        write, move, _ = self.rules[rule_head]
+        _, read = rule_head
 
-        state = index%self.state_count
-        index = np.floor(index/self.state_count)
-        
-        symbol = index%self.symbol_count
-        index = np.floor(index/self.symbol_count)
-
-        if index != 0:
-            raise Exception(f"Something ain't right, {index} should be 0: sign={sign}, move={move}, state={state}, symbol={symbol}")
-        
-        return TMTransition(int(symbol), int(state), int(move*sign))
-
-    def get_index_from_transition(self, transition: TMTransition):
-        index = transition.write_symbol*self.state_count*self.move_count*2
-        index += transition.new_state*self.move_count*2
-        index += (np.abs(transition.move) - 1)*2
-        index += 0 if transition.move < 0 else 1
-        return index
-
-    def transition_count(self):
-        return self.symbol_count*self.state_count*self.move_count*2
-    
-    def __str__(self):
-        result = f"POS:{self.position}, STATE:{self.state}, MEM:"
-        for i in range(self.memory.shape[0]):
-            result += " " + str(int(self.memory[i]))
-        
-        return result
-
-def get_action_tensor(prior_state: TMState, transition: TMTransition):
-    return torch.tensor(
-            [transition.write_symbol, transition.new_state, transition.move, prior_state.get_read_symbol(), prior_state.state])
-
-def get_state_tensor(prior_state: TMState):
-    return torch.tensor([prior_state.get_read_symbol(), prior_state.state], dtype=torch.float32)
-
+        return (read, (write, move))
