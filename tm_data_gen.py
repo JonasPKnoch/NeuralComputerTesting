@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+from torch.nn.functional import one_hot
 from tm import TuringMachine, TMDefinition, TMStatelessTransition, TMRuleSet
 from typing import Iterable, Callable
 from task_generators import TaskGenerator
@@ -13,12 +14,18 @@ def generate_tm_trace(initial_state: TuringMachine, max_depth = 10000) -> Iterab
 
 class TMTransitionDataset(Dataset):
     def __init__(self, rules: TMRuleSet, definition: TMDefinition, task_generator: TaskGenerator, task_count=100):
-        self.transition_list = []
+        self.trace_list = []
         for _ in range(task_count):
             input, output = task_generator()
             initial_tm = TuringMachine(rules, definition, input)
+            trace = []
             for read, (write, move) in generate_tm_trace(initial_tm):
-                self.transition_list.append((torch.tensor([read]), torch.tensor([write, move])))
+
+                read_one_hot = one_hot(read, definition.symbol_count)
+                write_one_hot = one_hot(write, definition.symbol_count)
+                trace.append((read_one_hot, torch.cat(write_one_hot, move)))
+            
+            self.trace_list.append(trace)
         
     def __len__(self):
         return len(self.transition_list)
